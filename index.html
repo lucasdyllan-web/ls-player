@@ -901,6 +901,61 @@
       document.getElementById('ios-banner').style.display = 'flex';
     }
 
+    // Cloud Sync (Cross-device Continue Watching & Favorites)
+    async function pullCloudSync() {
+      if (!currentUser) return;
+      try {
+        const r = await fetch(`${CF_WORKER_PROXY}/sync?user=${encodeURIComponent(currentUser)}&t=${Date.now()}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data && data.watch_history) {
+          for (const [k, remoteItem] of Object.entries(data.watch_history)) {
+            const localItem = watchHistory[k];
+            const remoteTs = Number(remoteItem.updatedAt || (remoteItem.updated_at ? remoteItem.updated_at * 1000 : 0));
+            const localTs = localItem ? Number(localItem.updatedAt || 0) : 0;
+            if (!localItem || remoteTs >= localTs) {
+              watchHistory[k] = remoteItem;
+            }
+          }
+          localStorage.setItem("lsplay_watch_history", JSON.stringify(watchHistory));
+        }
+        if (Array.isArray(data.fav_live) && data.fav_live.length) {
+          data.fav_live.forEach((id) => favLive.add(Number(id)));
+          localStorage.setItem("lsplay_fav_live", JSON.stringify(Array.from(favLive)));
+        }
+        if (Array.isArray(data.fav_vod) && data.fav_vod.length) {
+          data.fav_vod.forEach((id) => favVod.add(Number(id)));
+          localStorage.setItem("lsplay_fav_vod", JSON.stringify(Array.from(favVod)));
+        }
+        if (Array.isArray(data.fav_series) && data.fav_series.length) {
+          data.fav_series.forEach((id) => favSeries.add(Number(id)));
+          localStorage.setItem("lsplay_fav_series", JSON.stringify(Array.from(favSeries)));
+        }
+      } catch (_) {}
+    }
+
+    async function pushCloudSync() {
+      if (!currentUser) return;
+      try {
+        await fetch(`${CF_WORKER_PROXY}/sync?user=${encodeURIComponent(currentUser)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fav_live: Array.from(favLive),
+            fav_vod: Array.from(favVod),
+            fav_series: Array.from(favSeries),
+            watch_history: watchHistory
+          })
+        });
+      } catch (_) {}
+    }
+
+    function getEntryPosSec(entry) {
+      if (!entry) return 0;
+      if (entry.positionSec) return Number(entry.positionSec);
+      const ms = Number(entry.positionMs || entry.position_ms || 0);
+      return Math.floor(ms / 1000);
+    }
     // Apply saved theme
     if (localStorage.getItem("lsplay_theme") === "blue") {
       document.body.classList.add("theme-blue");
@@ -974,6 +1029,7 @@
         localStorage.setItem("lsplay_user", u);
         localStorage.setItem("lsplay_pass", p);
 
+        await pullCloudSync();
         document.getElementById("login-screen").classList.remove("active");
         document.getElementById("app-screen").classList.add("active");
         loadAllCatalogs();
@@ -1148,10 +1204,14 @@
         key: `live_${sid}`,
         kind: "live",
         streamId: sid,
+        stream_id: sid,
         title: ch.name,
+        positionMs: 6000,
+        positionSec: 6,
         updatedAt: Date.now()
       };
       localStorage.setItem("lsplay_watch_history", JSON.stringify(watchHistory));
+      pushCloudSync();
 
       const url = wrapProxyUrl(`${activeDns}/live/${currentUser}/${currentPass}/${sid}.m3u8`);
       openPlayer({ url, title: ch.name, isLive: true, watchKey: `live_${sid}`, startSec: 0 });
@@ -1170,10 +1230,10 @@
       let items = [];
       if (selectedVodCat === "__CONT__") {
         const recent = Object.values(watchHistory)
-          .filter((x) => x.kind === "vod" && (x.positionSec || 0) > 5)
+          .filter((x) => x.kind === "vod" && getEntryPosSec(x) > 5)
           .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
         const byId = Object.fromEntries(vodStreams.map((v) => [v.stream_id, v]));
-        items = recent.map((r) => byId[r.streamId]).filter((v) => v && (!q || v.name.toLowerCase().includes(q)));
+        items = recent.map((r) => byId[r.streamId || r.stream_id]).filter((v) => v && (!q || v.name.toLowerCase().includes(q)));
       } else {
         items = vodStreams.filter((v) => {
           const catOk = selectedVodCat === "__ALL__"
@@ -1214,7 +1274,7 @@
       document.getElementById("vod-play-btn").onclick = () => {
         const ext = v.container_extension || "mp4";
         const url = wrapProxyUrl(`${activeDns}/movie/${currentUser}/${currentPass}/${sid}.${ext}`);
-        const saved = (watchHistory[`vod_${sid}`] && watchHistory[`vod_${sid}`].positionSec) || 0;
+        const saved = getEntryPosSec(watchHistory[`vod_${sid}`]);
         openPlayer({
           url,
           title: v.name,
@@ -1246,14 +1306,15 @@
       let items = [];
       if (selectedSeriesCat === "__CONT__") {
         const recent = Object.values(watchHistory)
-          .filter((x) => x.kind === "series" && (x.positionSec || 0) > 5)
+          .filter((x) => x.kind === "series" && getEntryPosSec(x) > 5)
           .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
         const byId = Object.fromEntries(seriesList.map((s) => [s.series_id, s]));
         const seen = new Set();
         recent.forEach((r) => {
-          if (byId[r.seriesId] && !seen.has(r.seriesId)) {
-            seen.add(r.seriesId);
-            items.push(byId[r.seriesId]);
+          const sid = r.seriesId || r.series_id;
+          if (byId[sid] && !seen.has(sid)) {
+            seen.add(sid);
+            items.push(byId[sid]);
           }
         });
       } else {
@@ -1324,7 +1385,7 @@
           const ext = ep.container_extension || "mp4";
           const url = wrapProxyUrl(`${activeDns}/series/${currentUser}/${currentPass}/${ep.id}.${ext}`);
           const watchKey = `ep_${ep.id}`;
-          const saved = (watchHistory[watchKey] && watchHistory[watchKey].positionSec) || 0;
+          const saved = getEntryPosSec(watchHistory[watchKey]);
           openPlayer({
             url,
             title: `${currentSeries.name} • T${seasonKey}E${ep.episode_num}`,
@@ -1418,10 +1479,15 @@
           ...activePlayback.meta,
           key: activePlayback.watchKey,
           positionSec: pos,
+          positionMs: pos * 1000,
+          position_ms: pos * 1000,
           durationSec: dur,
+          durationMs: dur * 1000,
+          duration_ms: dur * 1000,
           updatedAt: Date.now()
         };
         localStorage.setItem("lsplay_watch_history", JSON.stringify(watchHistory));
+        pushCloudSync();
       }
     }
 
@@ -1534,6 +1600,7 @@
     function toggleFav(setObj, key, id) {
       if (setObj.has(id)) setObj.delete(id); else setObj.add(id);
       localStorage.setItem(key, JSON.stringify(Array.from(setObj)));
+      pushCloudSync();
     }
 
     function toggleTheme() {
