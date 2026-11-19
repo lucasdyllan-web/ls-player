@@ -508,6 +508,7 @@
     #player-screen {
       position: fixed;
       inset: 0;
+      height: 100dvh;
       background: #000000;
       z-index: 200;
       flex-direction: column;
@@ -519,9 +520,11 @@
       display: flex;
       align-items: center;
       gap: 12px;
+      flex-shrink: 0;
     }
     .player-video-area {
       flex: 1;
+      min-height: 0;
       position: relative;
       display: flex;
       align-items: center;
@@ -1493,7 +1496,7 @@
           video.play().catch(() => {});
         });
         hlsInstance.on(Hls.Events.ERROR, (_, data) => {
-          if (data.fatal) showPlayerError();
+          if (data.fatal) showPlayerError(`HLS: ${data.type} (${data.details || "erro"})`);
         });
       } else {
         video.src = url;
@@ -1501,7 +1504,11 @@
           if (startSec > 5) video.currentTime = startSec;
           video.play().catch(() => {});
         };
-        video.onerror = () => showPlayerError();
+        video.onerror = () => {
+          const code = video.error ? video.error.code : 0;
+          const map = { 1: "Abortado", 2: "Erro de rede/servidor", 3: "Erro de decodificação", 4: "Formato/Codec não suportado pelo navegador" };
+          showPlayerError(`Código ${code}: ${map[code] || "Erro desconhecido"}`);
+        };
       }
 
       video.onplay = () => { document.getElementById("btn-play-pause").textContent = "⏸"; };
@@ -1547,8 +1554,18 @@
       }
     }
 
-    function showPlayerError() {
-      document.getElementById("player-error-overlay").style.display = "flex";
+    function showPlayerError(detail) {
+      const ov = document.getElementById("player-error-overlay");
+      let diag = document.getElementById("player-error-diag");
+      if (!diag) {
+        diag = document.createElement("div");
+        diag.id = "player-error-diag";
+        diag.style.cssText = "font-size:12px; color:#8B95A5; margin-top:-6px;";
+        const card = ov.querySelector(".player-error-card");
+        if (card) card.appendChild(diag);
+      }
+      diag.textContent = detail || "";
+      ov.style.display = "flex";
     }
 
     function retryStream() {
