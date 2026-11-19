@@ -644,8 +644,8 @@
         </div>
       </div>
       <div class="login-hint">Entre com seu usuário e senha Xtream Codes</div>
-      <input id="login-user" class="input-field" type="text" placeholder="Usuário" autocomplete="username" />
-      <input id="login-pass" class="input-field" type="password" placeholder="Senha" autocomplete="current-password" />
+      <input id="login-user" class="input-field" type="text" placeholder="Usuário" autocomplete="username" onkeydown="if(event.key==='Enter'){event.preventDefault(); const p=document.getElementById('login-pass'); if(!p.value.trim()) p.focus(); else doLogin();}" />
+      <input id="login-pass" class="input-field" type="password" placeholder="Senha" autocomplete="current-password" onkeydown="if(event.key==='Enter'){event.preventDefault(); doLogin();}" />
       <div id="login-error" class="error-msg"></div>
       <button id="login-btn" class="primary-btn" onclick="doLogin()">ENTRAR</button>
       <div id="device-disclaimer" style="text-align:center; color:#8FAAC0; font-size:11px; line-height:1.45; margin-top:4px;">
