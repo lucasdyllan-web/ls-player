@@ -1142,8 +1142,7 @@
       }
 
       const listEl = document.getElementById("live-ch-list");
-      listEl.innerHTML = "";
-      filteredLive.slice(0, 250).forEach((ch) => {
+      renderProgressiveList(listEl, filteredLive, 250, (ch) => {
         const row = document.createElement("div");
         row.className = "channel-row" + (selectedLive && selectedLive.stream_id === ch.stream_id ? " active" : "");
         const img = document.createElement("img");
@@ -1177,7 +1176,7 @@
         row.appendChild(img);
         row.appendChild(name);
         row.appendChild(star);
-        listEl.appendChild(row);
+        return row;
       });
     }
 
@@ -1260,13 +1259,12 @@
       }
 
       const grid = document.getElementById("vod-grid");
-      grid.innerHTML = "";
-      items.slice(0, 120).forEach((v) => {
+      renderProgressiveList(grid, items, 120, (v) => {
         const card = document.createElement("div");
         card.className = "poster-card";
         card.innerHTML = `<img src="${v.stream_icon || 'logo.png'}" onerror="this.src='logo.png'" loading="lazy" /><div class="poster-title">${v.name}</div>`;
         card.onclick = () => openVodDetail(v);
-        grid.appendChild(card);
+        return card;
       });
     }
 
@@ -1343,14 +1341,56 @@
       }
 
       const grid = document.getElementById("series-grid");
-      grid.innerHTML = "";
-      items.slice(0, 120).forEach((s) => {
+      renderProgressiveList(grid, items, 120, (s) => {
         const card = document.createElement("div");
         card.className = "poster-card";
         card.innerHTML = `<img src="${s.cover || 'logo.png'}" onerror="this.src='logo.png'" loading="lazy" /><div class="poster-title">${s.name}</div>`;
         card.onclick = () => openSeriesDetail(s);
-        grid.appendChild(card);
+        return card;
       });
+    }
+
+    function renderProgressiveList(container, items, batchSize, buildFn) {
+      if (container._obs) {
+        container._obs.disconnect();
+        container._obs = null;
+      }
+      container.innerHTML = "";
+      let offset = 0;
+
+      const appendBatch = () => {
+        const existingBtn = container.querySelector(".load-more-sentinel");
+        if (existingBtn) existingBtn.remove();
+
+        const frag = document.createDocumentFragment();
+        const slice = items.slice(offset, offset + batchSize);
+        slice.forEach((item) => frag.appendChild(buildFn(item)));
+        offset += slice.length;
+        container.appendChild(frag);
+
+        if (offset < items.length) {
+          const remaining = items.length - offset;
+          const btn = document.createElement("button");
+          btn.className = "btn-secondary load-more-sentinel";
+          btn.style.cssText = "grid-column: 1 / -1; width: 100%; padding: 14px; margin: 12px 0; text-align: center;";
+          btn.textContent = `Carregar mais (+${remaining} restantes)`;
+          btn.onclick = () => appendBatch();
+          container.appendChild(btn);
+
+          if ("IntersectionObserver" in window) {
+            const obs = new IntersectionObserver((entries) => {
+              if (entries[0] && entries[0].isIntersecting) {
+                obs.disconnect();
+                appendBatch();
+              }
+            }, { root: container, rootMargin: "300px" });
+            obs.observe(btn);
+            container._obs = obs;
+          }
+        }
+      };
+
+      appendBatch();
     }
 
     async function openSeriesDetail(s) {
