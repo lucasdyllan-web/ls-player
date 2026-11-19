@@ -850,6 +850,15 @@
   <script>
     const DEFAULT_DNS = "http://lsplay.xyz:80";
     const REMOTE_GIST_DNS = "https://gist.githubusercontent.com/lucasdyllan-web/01a43620da3ff43862789051ae06ad4e/raw/dns.txt";
+    const CF_WORKER_PROXY = "https://lsplay-proxy.lucasdyllan.workers.dev";
+
+    function wrapProxyUrl(rawUrl) {
+      if (!rawUrl) return rawUrl;
+      if (window.location.protocol === "https:" && rawUrl.startsWith("http://")) {
+        return `${CF_WORKER_PROXY}/?url=${encodeURIComponent(rawUrl)}`;
+      }
+      return rawUrl;
+    }
 
     let activeDns = localStorage.getItem("lsplay_dns") || DEFAULT_DNS;
     let currentUser = localStorage.getItem("lsplay_user") || "";
@@ -913,34 +922,29 @@
       } catch (_) {}
     }
 
-    // Fetch Xtream API (with local proxy or CORS fallback when hosted on HTTPS)
+    // Fetch Xtream API (via Cloudflare HTTPS Worker or local proxy)
     async function xtreamGet(params) {
       const qs = new URLSearchParams(params).toString();
       const targetUrl = `${activeDns}/player_api.php?${qs}`;
 
-      // 1. If running via local server.py proxy
+      // 1. Primary: Official Cloudflare HTTPS Worker Proxy
+      try {
+        const r = await fetch(`${CF_WORKER_PROXY}/?url=${encodeURIComponent(targetUrl)}`);
+        if (r.ok) return await r.json();
+      } catch (_) {}
+
+      // 2. If running via local server.py proxy
       if (window.location.pathname.startsWith("/app") || window.location.port === "8765") {
         const r = await fetch(`/api?url=${encodeURIComponent(targetUrl)}`);
         if (r.ok) return await r.json();
       }
 
-      // 2. Try direct fetch
+      // 3. Direct fetch (when hosted on HTTP)
       try {
         const r = await fetch(targetUrl);
         if (r.ok) return await r.json();
       } catch (_) {}
 
-      // 3. Fallback via CORS proxy for HTTPS web app -> HTTP Xtream panel
-      const proxies = [
-        `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
-      ];
-      for (const p of proxies) {
-        try {
-          const r = await fetch(p);
-          if (r.ok) return await r.json();
-        } catch (_) {}
-      }
       throw new Error("Não foi possível conectar ao servidor IPTV.");
     }
 
@@ -1149,7 +1153,7 @@
       };
       localStorage.setItem("lsplay_watch_history", JSON.stringify(watchHistory));
 
-      const url = `${activeDns}/live/${currentUser}/${currentPass}/${sid}.m3u8`;
+      const url = wrapProxyUrl(`${activeDns}/live/${currentUser}/${currentPass}/${sid}.m3u8`);
       openPlayer({ url, title: ch.name, isLive: true, watchKey: `live_${sid}`, startSec: 0 });
     }
 
@@ -1209,7 +1213,7 @@
 
       document.getElementById("vod-play-btn").onclick = () => {
         const ext = v.container_extension || "mp4";
-        const url = `${activeDns}/movie/${currentUser}/${currentPass}/${sid}.${ext}`;
+        const url = wrapProxyUrl(`${activeDns}/movie/${currentUser}/${currentPass}/${sid}.${ext}`);
         const saved = (watchHistory[`vod_${sid}`] && watchHistory[`vod_${sid}`].positionSec) || 0;
         openPlayer({
           url,
@@ -1318,7 +1322,7 @@
         row.innerHTML = `<div class="channel-name">▶ E${ep.episode_num} — ${ep.title || 'Episódio ' + ep.episode_num}</div>`;
         row.onclick = () => {
           const ext = ep.container_extension || "mp4";
-          const url = `${activeDns}/series/${currentUser}/${currentPass}/${ep.id}.${ext}`;
+          const url = wrapProxyUrl(`${activeDns}/series/${currentUser}/${currentPass}/${ep.id}.${ext}`);
           const watchKey = `ep_${ep.id}`;
           const saved = (watchHistory[watchKey] && watchHistory[watchKey].positionSec) || 0;
           openPlayer({
