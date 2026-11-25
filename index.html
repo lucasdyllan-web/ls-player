@@ -1303,11 +1303,20 @@
     const DEFAULT_DNS = "http://lsplay.xyz:80";
     const REMOTE_GIST_DNS = "https://gist.githubusercontent.com/lucasdyllan-web/01a43620da3ff43862789051ae06ad4e/raw/dns.txt";
     const CF_WORKER_PROXY = "https://lsplay-proxy.lucasdyllan.workers.dev";
+    let VERCEL_PROXY = localStorage.getItem("lsplay_vercel_proxy") || "https://ls-player.vercel.app/api/proxy";
+
+    function getActiveApiProxyBase() {
+      if (window.location.hostname.endsWith(".vercel.app")) {
+        return `${window.location.origin}/api/proxy`;
+      }
+      return VERCEL_PROXY;
+    }
 
     function wrapProxyUrl(rawUrl) {
       if (!rawUrl) return rawUrl;
       if (window.location.protocol === "https:" && rawUrl.startsWith("http://")) {
-        return `${CF_WORKER_PROXY}/?url=${encodeURIComponent(rawUrl)}`;
+        // Use AWS Sao Paulo Vercel proxy for the initial 302 handshake (which redirects video to CF Worker + sslip.io)
+        return `${getActiveApiProxyBase()}?url=${encodeURIComponent(rawUrl)}`;
       }
       return rawUrl;
     }
@@ -1456,16 +1465,19 @@
       return Math.floor(ms / 1000);
     }
 
-    // Resolve Remote DNS from Secret Gist
+    // Resolve Remote DNS (and optional proxy URL on line 2) from Secret Gist
     async function resolveRemoteDns() {
       try {
         const res = await fetch(`${REMOTE_GIST_DNS}?t=${Date.now()}`, { cache: "no-store" });
         if (res.ok) {
-          const txt = (await res.text()).trim();
-          const line = txt.split(/\r?\n/)[0].trim();
-          if (line.startsWith("http://") || line.startsWith("https://")) {
-            activeDns = line.replace(/\/+$/, "");
+          const lines = (await res.text()).trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+          if (lines[0] && (lines[0].startsWith("http://") || lines[0].startsWith("https://"))) {
+            activeDns = lines[0].replace(/\/+$/, "");
             localStorage.setItem("lsplay_dns", activeDns);
+          }
+          if (lines[1] && lines[1].startsWith("https://")) {
+            VERCEL_PROXY = lines[1].replace(/\/+$/, "");
+            localStorage.setItem("lsplay_vercel_proxy", VERCEL_PROXY);
           }
         }
       } catch (_) {}
@@ -1476,16 +1488,25 @@
       const qs = new URLSearchParams(params).toString();
       const targetUrl = `${activeDns}/player_api.php?${qs}`;
 
+      // 1. Primary: Vercel AWS Sao Paulo Proxy (bypasses Cloudflare-to-Cloudflare 403 block)
+      try {
+        const r = await fetch(`${getActiveApiProxyBase()}?url=${encodeURIComponent(targetUrl)}`);
+        if (r.ok) return await r.json();
+      } catch (_) {}
+
+      // 2. Fallback: Cloudflare HTTPS Worker Proxy
       try {
         const r = await fetch(`${CF_WORKER_PROXY}/?url=${encodeURIComponent(targetUrl)}`);
         if (r.ok) return await r.json();
       } catch (_) {}
 
+      // 3. Local server.py proxy
       if (window.location.pathname.startsWith("/app") || window.location.port === "8765") {
         const r = await fetch(`/api?url=${encodeURIComponent(targetUrl)}`);
         if (r.ok) return await r.json();
       }
 
+      // 4. Direct HTTP fetch
       try {
         const r = await fetch(targetUrl);
         if (r.ok) return await r.json();
@@ -1549,32 +1570,40 @@
       if (refBtn) refBtn.textContent = "↻ Atualizando...";
 
       try {
-        const [lCats, lStreams, vCats, vStreams, sCats, sList] = await Promise.all([
+        // Stage 1: Live TV (<1MB, instant)
+        const [lCats, lStreams] = await Promise.all([
           xtreamGet({ username: currentUser, password: currentPass, action: "get_live_categories" }).catch(() => []),
-          xtreamGet({ username: currentUser, password: currentPass, action: "get_live_streams" }).catch(() => []),
-          xtreamGet({ username: currentUser, password: currentPass, action: "get_vod_categories" }).catch(() => []),
-          xtreamGet({ username: currentUser, password: currentPass, action: "get_vod_streams" }).catch(() => []),
-          xtreamGet({ username: currentUser, password: currentPass, action: "get_series_categories" }).catch(() => []),
-          xtreamGet({ username: currentUser, password: currentPass, action: "get_series" }).catch(() => [])
+          xtreamGet({ username: currentUser, password: currentPass, action: "get_live_streams" }).catch(() => [])
         ]);
         liveCats = Array.isArray(lCats) ? lCats : [];
         liveStreams = Array.isArray(lStreams) ? lStreams : [];
-        vodCats = Array.isArray(vCats) ? vCats : [];
-        vodStreams = Array.isArray(vStreams) ? vStreams : [];
-        seriesCats = Array.isArray(sCats) ? sCats : [];
-        seriesList = Array.isArray(sList) ? sList : [];
-
-        if (!selectedLive && liveStreams.length) {
-          selectedLive = liveStreams[0];
-        }
-
+        if (!selectedLive && liveStreams.length) selectedLive = liveStreams[0];
         renderHomeDashboard();
         renderLiveSidebar();
         renderLiveChannels();
-        renderVodSidebar();
-        renderVodGrid();
+
+        // Stage 2: Series (~10MB)
+        const [sCats, sList] = await Promise.all([
+          xtreamGet({ username: currentUser, password: currentPass, action: "get_series_categories" }).catch(() => []),
+          xtreamGet({ username: currentUser, password: currentPass, action: "get_series" }).catch(() => [])
+        ]);
+        seriesCats = Array.isArray(sCats) ? sCats : [];
+        seriesList = Array.isArray(sList) ? sList : [];
+        renderHomeDashboard();
         renderSeriesSidebar();
         renderSeriesGrid();
+
+        // Stage 3: VOD Movies (~40MB)
+        const [vCats, vStreams] = await Promise.all([
+          xtreamGet({ username: currentUser, password: currentPass, action: "get_vod_categories" }).catch(() => []),
+          xtreamGet({ username: currentUser, password: currentPass, action: "get_vod_streams" }).catch(() => [])
+        ]);
+        vodCats = Array.isArray(vCats) ? vCats : [];
+        vodStreams = Array.isArray(vStreams) ? vStreams : [];
+
+        renderHomeDashboard();
+        renderVodSidebar();
+        renderVodGrid();
         renderAccountInfo();
 
         if (statusEl) statusEl.textContent = "Lista atualizada agora mesmo";

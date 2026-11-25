@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lsplay-pwa-v3';
+const CACHE_NAME = 'lsplay-pwa-v4';
 const ASSETS = ['./', './index.html', './manifest.json', './logo.png'];
 
 self.addEventListener('install', (e) => {
